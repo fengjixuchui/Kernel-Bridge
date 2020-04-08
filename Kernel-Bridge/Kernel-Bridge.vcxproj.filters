@@ -196,9 +196,6 @@
     <ClInclude Include="..\CommonTypes\SVM.h">
       <Filter>CommonTypes</Filter>
     </ClInclude>
-    <ClInclude Include="..\CommonTypes\DescriptorTables.h">
-      <Filter>CommonTypes</Filter>
-    </ClInclude>
     <ClInclude Include="API\PteUtils.h">
       <Filter>API</Filter>
     </ClInclude>
@@ -208,6 +205,12 @@
     <ClInclude Include="..\CommonTypes\Registers.h">
       <Filter>CommonTypes</Filter>
     </ClInclude>
+    <ClInclude Include="..\CommonTypes\CPUID.h">
+      <Filter>CommonTypes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\CommonTypes\Segmentation.h">
+      <Filter>CommonTypes</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="Exports.def">
@@ -215,7 +218,7 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <MASM Include="API\SVM.asm">
+    <MASM Include="API\VMM.asm">
       <Filter>API</Filter>
     </MASM>
   </ItemGroup>
