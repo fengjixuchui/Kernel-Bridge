@@ -15,6 +15,11 @@ _str PROC PUBLIC
     ret
 _str ENDP
 
+__invd PROC PUBLIC
+    invd
+    ret
+__invd ENDP
+
 HypercallHyperV PROC PUBLIC
     ; RCX - HYPERCALL_INPUT_VALUE
     ; RDX - Input parameters GPA when the Fast flag is 0, otherwise input parameter
@@ -181,6 +186,19 @@ VmmExit:
 SvmVmmRun ENDP
 
 
+__invept PROC PUBLIC
+    ; RCX - INVEPT_TYPE
+    ; RDX - INVEPT_DESCRIPTOR
+    invept rcx, OWORD PTR [rdx]
+    ret
+__invept ENDP
+
+__invvpid PROC PUBLIC
+    ; RCX - INVVPID_TYPE
+    ; RDX - INVVPID_DESCRIPTOR
+    invvpid rcx, OWORD PTR [rdx]
+    ret
+__invvpid ENDP
 
 VmxVmmRun PROC PUBLIC
     PUSHAQ
