@@ -260,6 +260,143 @@ VOID ThreadingTests()
     }
 }
 
+void* GetFuncPtr(const void* Func)
+{
+    if (!Func) return nullptr;
+    const auto* FuncDataPtr = reinterpret_cast<const unsigned char*>(Func);
+    if (*FuncDataPtr == 0xE9)
+    {
+        auto Offset = *reinterpret_cast<const int*>(FuncDataPtr + 1);
+        return const_cast<unsigned char*>((FuncDataPtr + 5) + Offset);
+    }
+    else
+    {
+        return const_cast<void*>(Func);
+    }
+}
+
+#pragma section(".hidden", read, execute, nopage)
+__declspec(code_seg(".hidden")) unsigned int HiddenFunc(DWORD ThreadId)
+{
+    volatile unsigned char* volatile Self = reinterpret_cast<PBYTE>(GetFuncPtr(HiddenFunc));
+    
+    for (unsigned int i = 0; i < 10000000; ++i)
+    {
+        auto Value = *Self;
+        if (Value != 0x11)
+        {
+            printf("[ERROR:%u] Iteration %u, value: 0x%X\n", ThreadId, i, static_cast<unsigned int>(Value));
+        }
+    }
+
+    return 0x1EE7C0DE;
+}
+
+volatile LONG NeedToExit = FALSE;
+
+DWORD WINAPI TestingThread(PVOID Arg)
+{
+    DWORD ThreadId = GetCurrentThreadId();
+    while (InterlockedCompareExchange(&NeedToExit, TRUE, TRUE) == FALSE)
+    {
+        if (HiddenFunc(ThreadId) != 0x1EE7C0DE)
+        {
+            printf("[ERROR:%u] The HiddenFunc result != 0x1EE7C0DE\n", ThreadId);
+        }
+    }
+    printf("[TID:%u] The thread has been finished!\n", ThreadId);
+    return 0;
+}
+
+VOID TestHvPageInterception()
+{
+    using namespace Hypervisor;
+    using namespace PhysicalMemory;
+
+    constexpr unsigned int PageSize = 4096;
+
+    volatile PBYTE Read = reinterpret_cast<PBYTE>(VirtualAlloc(NULL, PageSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    volatile PBYTE Write = reinterpret_cast<PBYTE>(VirtualAlloc(NULL, PageSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    volatile PBYTE Execute = reinterpret_cast<PBYTE>(GetFuncPtr(HiddenFunc));
+
+    DWORD OldProtect = 0;
+    VirtualProtect(Execute, PageSize, PAGE_EXECUTE_READWRITE, &OldProtect);
+
+    VirtualLock(Read, PageSize);
+    VirtualLock(Write, PageSize);
+    VirtualLock(Execute, PageSize);
+
+    const auto ValidData = *Execute;
+
+    *Read = 0x11;
+    *Write = 0x22;
+    *Execute = ValidData;
+
+    WdkTypes::PVOID64 ReadPa = 0, WritePa = 0, ExecutePa = 0;
+    KbGetPhysicalAddress(NULL, reinterpret_cast<WdkTypes::PVOID>(Read), &ReadPa);
+    KbGetPhysicalAddress(NULL, reinterpret_cast<WdkTypes::PVOID>(Write), &WritePa);
+    KbGetPhysicalAddress(NULL, reinterpret_cast<WdkTypes::PVOID>(Execute), &ExecutePa);
+    
+    printf("OnRead    : VA:%p, PA:0x%I64X (Value: 0x%X)\n", Read, ReadPa, static_cast<unsigned int>(*Read));
+    printf("OnWrite   : VA:%p, PA:0x%I64X (Value: 0x%X)\n", Write, WritePa, static_cast<unsigned int>(*Write));
+    printf("OnExecute : VA:%p, PA:0x%I64X (Value: 0x%X)\n", Execute, ExecutePa, static_cast<unsigned int>(*Execute));
+
+    KbVmmInterceptPage(ExecutePa, ReadPa, WritePa, ExecutePa);
+    
+    __nop();
+    __nop();
+    __nop();
+    *Execute = 0x33;
+    __nop();
+    __nop();
+    __nop();
+
+    HiddenFunc(GetCurrentThreadId());
+
+    InterlockedExchange(&NeedToExit, FALSE);
+
+#if FALSE
+    constexpr unsigned int ThreadsCount = 12;
+    std::vector<HANDLE> Threads(ThreadsCount);
+    for (unsigned int i = 0; i < ThreadsCount; ++i)
+    {
+        Threads[i] = CreateThread(NULL, 0, TestingThread, NULL, 0, NULL);
+    }
+
+    while (true)
+    {
+        std::wstring Command;
+        std::wcin >> Command;
+        if (Command == L"exit")
+        {
+            printf("Exiting...\n");
+            InterlockedExchange(&NeedToExit, TRUE);
+            break;
+        }
+        else
+        {
+            printf("Unknown command! Please, write 'exit' to exit!\n");
+        }
+    }
+
+    WaitForMultipleObjects(ThreadsCount, &Threads[0], TRUE, INFINITE);
+
+    for (const auto& hThread : Threads)
+    {
+        CloseHandle(hThread);
+    }
+#endif
+
+    KbVmmDeinterceptPage(ExecutePa);
+
+    VirtualUnlock(Execute, PageSize);
+    VirtualUnlock(Write, PageSize);
+    VirtualUnlock(Read, PageSize);
+
+    VirtualFree(Write, 0, MEM_RELEASE);
+    VirtualFree(Read, 0, MEM_RELEASE);
+}
+
 VOID RunAllTests()
 {
     //ThreadingTests();
@@ -278,19 +415,21 @@ VOID RunAllTests()
     if (Hypervisor::KbVmmEnable())
     {
         printf("VMM enabled!\r\n");
+        printf(
+            "Commands:\n"
+            "  exit: disable the hypervisor and exit\n"
+        );
         while (true)
         {
-            print_cpuid();
-            Sleep(1000);
-            __try
+            std::wstring Command;
+            std::wcin >> Command;
+            if (Command == L"exit")
             {
-                int buf[4] = {};
-                __cpuid(buf, 0x11223344);
-                printf("Exception not raised!\n");
+                break;
             }
-            __except (EXCEPTION_EXECUTE_HANDLER)
+            else
             {
-                printf("Exception was raised! Events injections are working properly!\n");
+                printf("Unknown command!\n");
             }
         }
         Hypervisor::KbVmmDisable();
@@ -303,11 +442,24 @@ VOID RunAllTests()
     }
 }
 
+std::wstring GetCurrentFolder()
+{
+    WCHAR Path[MAX_PATH] = {};
+    DWORD PathLength = ARRAYSIZE(Path);
+    BOOL Status = QueryFullProcessImageName(GetCurrentProcess(), 0, Path, &PathLength);
+    return Status ? std::wstring(Path, PathLength) : std::wstring();
+}
+
 int main()
 {
-    printf("[Kernel-Tests]: PID: %i, TID: %i\r\n", GetCurrentProcessId(), GetCurrentThreadId());
+    std::wstring CurrentFolder = GetCurrentFolder();
+    if (CurrentFolder.empty())
+    {
+        printf("Unable to determine current directory!\n");
+        return 0;
+    }
 
-    ceilf(0.25f);
+    printf("[Kernel-Tests]: PID: %i, TID: %i\r\n", GetCurrentProcessId(), GetCurrentThreadId());
 
     if (KbLoader::KbLoadAsFilter(
         L"C:\\Temp\\Kernel-Bridge\\Kernel-Bridge.sys",
